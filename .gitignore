@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.db
+*.sqlite3
+data/*.db
+data/t4_ed25519_private.pem
+.venv/
+venv/
+*.log

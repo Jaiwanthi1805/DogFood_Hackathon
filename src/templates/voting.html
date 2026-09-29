@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Community Vote · {{ event.name }}{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/events/{{ event.id }}">← {{ event.name }}</a></div>
+<h1>Community vote</h1>
+<p class="subtitle" id="voting-message" role="status">Loading submitted projects...</p>
+<div class="project-grid" id="voting-projects"></div>
+<section class="dashboard-section hidden" id="voting-results">
+  <h2>Community results</h2>
+  <div id="voting-results-list"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const eventId = {{ event.id | tojson }};
+const message = document.getElementById('voting-message');
+const projectList = document.getElementById('voting-projects');
+
+async function loadResults() {
+  const response = await fetch(`/api/events/${eventId}/voting/results`);
+  if (!response.ok) return;
+  const data = await response.json();
+  const section = document.getElementById('voting-results');
+  const list = document.getElementById('voting-results-list');
+  data.results.sort((left, right) => right.votes - left.votes).forEach(result => {
+    const row = document.createElement('p');
+    row.textContent = `${result.title}: ${result.votes} vote${result.votes === 1 ? '' : 's'}`;
+    list.appendChild(row);
+  });
+  section.classList.remove('hidden');
+}
+
+async function submitVote(projectId) {
+  const token = localStorage.getItem('dogfood_token');
+  if (!token) {
+    window.location.href = '/login';
+    return;
+  }
+  const response = await fetch(`/api/events/${eventId}/voting/votes`, {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    body: JSON.stringify({project_id: projectId}),
+  });
+  const result = await response.json();
+  message.textContent = response.ok ? 'Vote recorded.' : (result.detail || 'Unable to vote.');
+  if (response.ok) {
+    projectList.querySelectorAll('button').forEach(button => { button.disabled = true; });
+    await loadResults();
+  }
+}
+
+(async function loadProjects() {
+  const token = localStorage.getItem('dogfood_token');
+  if (!token) {
+    message.textContent = 'Log in with an eligible participant account to vote.';
+    return;
+  }
+  const response = await fetch(`/api/events/${eventId}/voting/projects`, {
+    headers: {'Authorization': 'Bearer ' + token},
+  });
+  const projects = await response.json();
+  if (!response.ok) {
+    message.textContent = projects.detail || 'Unable to load voting projects.';
+    await loadResults();
+    return;
+  }
+  if (projects.length === 0) {
+    message.textContent = 'There are no submitted projects to vote on.';
+    return;
+  }
+  const hasVoted = projects[0].has_voted;
+  message.textContent = hasVoted ? 'Your vote has been recorded.' : 'Select one project to cast your vote.';
+  projects.forEach(project => {
+    const card = document.createElement('article');
+    card.className = 'project-card';
+    const title = document.createElement('h2');
+    const link = document.createElement('a');
+    link.href = `/projects/${encodeURIComponent(project.id)}`;
+    link.textContent = project.title;
+    title.appendChild(link);
+    const summary = document.createElement('p');
+    summary.className = 'project-summary';
+    summary.textContent = project.summary || '';
+    const button = document.createElement('button');
+    button.className = 'btn btn-primary';
+    button.type = 'button';
+    button.textContent = hasVoted ? 'Vote recorded' : 'Vote for project';
+    button.disabled = hasVoted;
+    button.addEventListener('click', () => submitVote(project.id));
+    card.append(title, summary, button);
+    projectList.appendChild(card);
+  });
+  await loadResults();
+})();
+</script>
+{% endblock %}

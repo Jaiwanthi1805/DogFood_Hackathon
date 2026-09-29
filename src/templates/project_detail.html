@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}{{ project.title }} · DOGFOOD 2026{% endblock %}
+{% block content %}
+<div class="breadcrumb">
+  <a href="/projects">← Gallery</a>
+</div>
+
+<div class="project-detail">
+  <div class="project-detail-header">
+    <h1>{{ project.title }}</h1>
+    <span class="status-badge status-{{ project.status }}">{{ project.status }}</span>
+  </div>
+
+  <div class="project-detail-meta">
+    <div class="meta-item">
+      <strong>Track:</strong> {{ track_name or 'Not specified' }}
+    </div>
+    <div class="meta-item">
+      <strong>Team:</strong> {{ team_name or 'Unknown' }}
+    </div>
+    {% if project.submitted_at %}
+    <div class="meta-item">
+      <strong>Submitted:</strong> {{ project.submitted_at.strftime('%Y-%m-%d %H:%M UTC') }}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="project-summary-section">
+    <h2>About this project</h2>
+    <p>{{ project.summary }}</p>
+  </div>
+
+  {% if project.repo_url %}
+  <div class="project-repo">
+    <h2>Repository</h2>
+    <a href="{{ project.repo_url }}" target="_blank" class="btn btn-primary">View Repository ↗</a>
+  </div>
+  {% endif %}
+
+  <section class="dashboard-section" style="margin-top:24px">
+    <h2>Community comments</h2>
+    <div id="project-comments" aria-live="polite"></div>
+    <form id="project-comment-form" class="hidden" style="margin-top:16px">
+      <div class="form-group">
+        <label for="project-comment-body">Add a comment</label>
+        <textarea id="project-comment-body" rows="3" maxlength="1000" required></textarea>
+      </div>
+      <button class="btn btn-primary" type="submit">Post comment</button>
+      <p id="project-comment-message" role="status" style="margin-top:10px"></p>
+    </form>
+  </section>
+
+  <!-- Judge scoring section: shown only if user is a judge -->
+  <div id="judge-score-section" style="display:none; margin-top:24px; border-top:1px solid #1B2540; padding-top:20px">
+    <h2>Judge Scoring</h2>
+    <div id="existing-score-display"></div>
+    <form id="judge-score-form" style="max-width:400px">
+      <div class="form-group">
+        <label>Functionality (1–5) <span style="color:#FF3D6E">*</span></label>
+        <input id="sc-func" type="number" min="1" max="5" required style="width:70px">
+      </div>
+      <div class="form-group">
+        <label>Quality (1–5) <span style="color:#FF3D6E">*</span></label>
+        <input id="sc-qual" type="number" min="1" max="5" required style="width:70px">
+      </div>
+      <div class="form-group">
+        <label>Innovation (1–5) <span style="color:#FF3D6E">*</span></label>
+        <input id="sc-innov" type="number" min="1" max="5" required style="width:70px">
+      </div>
+      <div class="form-group">
+        <label>Comment (optional)</label>
+        <textarea id="sc-comment" rows="3" style="width:100%;box-sizing:border-box"></textarea>
+      </div>
+      <button type="button" class="btn btn-primary" onclick="saveScore()">Save Score</button>
+      <p id="score-msg" style="margin-top:10px; color:#00E5D0"></p>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(async function() {
+  const projectId = {{ project.id | tojson }};
+  const comments = document.getElementById('project-comments');
+  const commentsResponse = await fetch(`/api/projects/${projectId}/comments`);
+  if (commentsResponse.ok) {
+    const entries = await commentsResponse.json();
+    if (entries.length === 0) {
+      comments.textContent = 'No comments yet.';
+    }
+    entries.forEach(entry => {
+      const item = document.createElement('article');
+      item.className = 'community-comment';
+      const author = document.createElement('strong');
+      author.textContent = entry.author;
+      const body = document.createElement('p');
+      body.textContent = entry.body;
+      const date = document.createElement('time');
+      date.textContent = new Date(entry.created_at).toLocaleString();
+      item.append(author, body, date);
+      comments.appendChild(item);
+    });
+  }
+
+  if (token) {
+    const userResponse = await fetch('/api/auth/me', {headers:{'Authorization':'Bearer '+token}});
+    if (userResponse.ok && (await userResponse.json()).role === 'participant') {
+      document.getElementById('project-comment-form').classList.remove('hidden');
+    }
+  }
+
+  if (!token) return;
+  const meResp = await fetch('/api/auth/me', {headers:{'Authorization':'Bearer '+token}});
+  if (!meResp.ok) return;
+  const user = await meResp.json();
+  if (user.role !== 'judge') return;
+
+  // Show judge section
+  document.getElementById('judge-score-section').style.display = 'block';
+
+  // Load existing score if any
+  const scoreResp = await fetch('/api/judge/scores/' + projectId, {
+    headers: {'Authorization': 'Bearer ' + token}
+  });
+  if (scoreResp.ok) {
+    const data = await scoreResp.json();
+    if (data.is_scored && data.score) {
+      const s = data.score;
+      document.getElementById('sc-func').value = s.criteria.functionality || '';
+      document.getElementById('sc-qual').value = s.criteria.quality || '';
+      document.getElementById('sc-innov').value = s.criteria.innovation || '';
+      document.getElementById('sc-comment').value = s.comment || '';
+      document.getElementById('existing-score-display').innerHTML =
+        `<p style="color:#00E5D0;margin-bottom:10px">✓ You have already scored this project. You can update your score below.</p>`;
+    }
+  }
+})();
+
+document.getElementById('project-comment-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const body = document.getElementById('project-comment-body').value;
+  const message = document.getElementById('project-comment-message');
+  const response = await fetch(`/api/projects/{{ project.id }}/comments`, {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    body: JSON.stringify({body}),
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    message.textContent = result.detail || 'Unable to post comment.';
+    return;
+  }
+  const item = document.createElement('article');
+  item.className = 'community-comment';
+  const author = document.createElement('strong');
+  author.textContent = result.author;
+  const text = document.createElement('p');
+  text.textContent = result.body;
+  const date = document.createElement('time');
+  date.textContent = new Date(result.created_at).toLocaleString();
+  item.append(author, text, date);
+  const list = document.getElementById('project-comments');
+  if (list.textContent === 'No comments yet.') list.textContent = '';
+  list.appendChild(item);
+  document.getElementById('project-comment-body').value = '';
+  message.textContent = 'Comment posted.';
+});
+
+async function saveScore() {
+  const projectId = '{{ project.id }}';
+  const func = parseInt(document.getElementById('sc-func').value);
+  const qual = parseInt(document.getElementById('sc-qual').value);
+  const innov = parseInt(document.getElementById('sc-innov').value);
+  const comment = document.getElementById('sc-comment').value;
+  const msg = document.getElementById('score-msg');
+
+  if (!func || !qual || !innov) { msg.textContent = 'Please fill in all criteria (1–5).'; msg.style.color='#FF3D6E'; return; }
+  if ([func,qual,innov].some(v => v<1||v>5)) { msg.textContent = 'Values must be between 1 and 5.'; msg.style.color='#FF3D6E'; return; }
+
+  const resp = await fetch('/api/judge/scores', {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    body: JSON.stringify({ project_id: projectId, criteria: {functionality:func, quality:qual, innovation:innov}, comment })
+  });
+
+  if (resp.ok) {
+    msg.style.color = '#00E5D0';
+    msg.textContent = '✓ Score saved!';
+    document.getElementById('existing-score-display').innerHTML =
+      `<p style="color:#00E5D0;margin-bottom:10px">✓ Score submitted. You can update it below.</p>`;
+  } else {
+    const err = await resp.json();
+    msg.style.color = '#FF3D6E';
+    msg.textContent = 'Error: ' + (err.detail || 'Unknown error');
+  }
+}
+</script>
+{% endblock %}

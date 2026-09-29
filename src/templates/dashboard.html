@@ -1,0 +1,326 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · DOGFOOD 2026{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+<div id="dashboard-content">Loading...</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+if (typeof token === 'undefined' || !token) { window.location.href = '/login'; }
+
+async function authFetch(url, options) {
+  const opts = options || {};
+  opts.headers = Object.assign({ 'Authorization': 'Bearer ' + token }, opts.headers || {});
+  return fetch(url, opts);
+}
+
+async function loadDashboard() {
+  const meResp = await authFetch('/api/auth/me');
+  if (!meResp.ok) { window.location.href = '/login'; return; }
+  const user = await meResp.json();
+
+  let html = `<div class="user-info">
+    <p><strong>Logged in as:</strong> ${user.name} (${user.email})</p>
+    <p><strong>Role:</strong> <span class="role-badge role-${user.role}">${user.role}</span></p>
+  </div>`;
+
+  // Events
+  const evResp = await authFetch('/api/events');
+  const events = evResp.ok ? await evResp.json() : [];
+
+  if (user.role === 'organizer') {
+    html += `<div class="dashboard-section">
+      <h2>Event Management</h2>
+      <a href="/events" class="btn btn-primary">Manage Events</a>
+      <button class="btn btn-secondary" onclick="showCreateEvent()">+ Create Event</button>
+      <div id="create-event-form" class="hidden">
+        <h3>Create New Event</h3>
+        <div class="form-group"><label>Name</label><input id="ev-name" type="text" placeholder="Hackathon name"></div>
+        <div class="form-group"><label>Description</label><textarea id="ev-desc"></textarea></div>
+        <div class="form-group"><label>Submissions Close (UTC)</label><input id="ev-close" type="datetime-local"></div>
+        <button class="btn btn-primary" onclick="createEvent()">Create</button>
+      </div>
+    </div>`;
+
+    // Judging Progress for organizer
+    const progResp = await authFetch('/api/judge/progress');
+    if (progResp.ok) {
+      const prog = await progResp.json();
+      const judgesRows = prog.judges.map(j => `
+        <tr>
+          <td>${j.name}</td>
+          <td>${j.email}</td>
+          <td>${j.tracks.join(', ') || '(all tracks)'}</td>
+          <td>${j.scored_projects} / ${j.assigned_projects}</td>
+          <td>
+            <div class="progress-bar-wrap">
+              <div class="progress-bar-fill" style="width:${j.completion_percentage}%"></div>
+            </div>
+            ${j.completion_percentage}%
+          </td>
+        </tr>
+      `).join('');
+
+      html += `<div class="dashboard-section">
+        <h2>Judging Progress</h2>
+        <p><strong>Total projects:</strong> ${prog.total_projects} &nbsp; <strong>Total scores submitted:</strong> ${prog.total_scores}</p>
+        <table class="progress-table">
+          <thead><tr><th>Judge</th><th>Email</th><th>Tracks</th><th>Scored</th><th>Progress</th></tr></thead>
+          <tbody>${judgesRows}</tbody>
+        </table>
+        <button type="button" class="btn btn-outline" style="margin-top:12px" onclick="exportScoresCsv()">⬇ Download Scores CSV</button>
+      </div>`;
+    }
+  }
+
+  if (user.role === 'participant') {
+    // Team info
+    const tmResp = await authFetch('/api/teams/my');
+    const myTeam = tmResp.ok ? await tmResp.json() : null;
+
+    html += `<div class="dashboard-section">
+      <h2>My Team</h2>`;
+    if (myTeam) {
+      html += `<p>You are on team: <strong>${myTeam.name}</strong></p>
+        <p>Members: ${myTeam.members.map(m => m.email).join(', ')}</p>
+        <a href="/teams" class="btn btn-outline">Team Details</a>`;
+    } else {
+      html += `<p>You are not on a team yet.</p>
+        <div class="form-group"><label>Create Team Name</label><input id="team-name" type="text" placeholder="My Awesome Team"></div>
+        <div class="form-group"><label>Event</label>
+          <select id="team-event">
+            ${events.map(e => `<option value="${e.id}">${e.name}</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="createTeam()">Create Team</button>`;
+    }
+    html += `</div>`;
+
+    // Projects
+    html += `<div class="dashboard-section">
+      <h2>My Projects</h2>
+      <a href="/submit" class="btn btn-primary">+ Submit Project</a>
+      <a href="/projects" class="btn btn-outline">View Gallery</a>
+    </div>`;
+  }
+
+  if (user.role === 'judge') {
+    // Load assigned projects
+    const projResp = await authFetch('/api/judge/projects');
+    if (!projResp.ok) {
+      html += `<div class="dashboard-section"><h2>Judging</h2><p>Unable to load assigned projects.</p></div>`;
+    } else {
+      const projects = await projResp.json();
+      const scored = projects.filter(p => p.is_scored).length;
+      const total = projects.length;
+
+      let projectsHtml = projects.map(p => {
+        const badge = p.is_scored
+          ? `<span class="status-badge status-submitted" style="background:#00b47a;color:#fff;font-size:0.7em">✓ Scored</span>`
+          : `<span class="status-badge" style="background:#FF3D6E;color:#fff;font-size:0.7em">Pending</span>`;
+        return `<div class="project-card" style="border:1px solid #1B2540;padding:14px;margin-bottom:10px;border-radius:4px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+            <div>
+              <strong>${p.title}</strong> ${badge}
+              <div style="font-size:0.85em;color:#6B7A9E;margin-top:4px">Track: ${p.track_name} · Team: ${p.team_name}</div>
+              ${p.summary ? `<p style="margin:6px 0;font-size:0.9em">${p.summary.slice(0,120)}${p.summary.length>120?'...':''}</p>` : ''}
+              ${p.is_scored && p.my_score ? `<div style="font-size:0.82em;color:#00E5D0">Your score — F:${p.my_score.criteria.functionality} Q:${p.my_score.criteria.quality} I:${p.my_score.criteria.innovation}</div>` : ''}
+            </div>
+            <button class="btn btn-${p.is_scored?'outline':'primary'}" style="white-space:nowrap;flex-shrink:0" onclick="openScoreForm('${p.id}','${p.title.replace(/'/g,"\\'")}')">
+              ${p.is_scored ? '✎ Edit Score' : '+ Score'}
+            </button>
+          </div>
+        </div>`;
+      }).join('') || '<p>No projects assigned to your tracks yet.</p>';
+
+      html += `<div class="dashboard-section">
+        <h2>My Judging Queue</h2>
+        <p><strong>${scored} of ${total}</strong> projects scored</p>
+        <div style="background:#0E1428;height:6px;border-radius:3px;margin-bottom:16px">
+          <div style="background:#00E5D0;height:6px;border-radius:3px;width:${total?Math.round(scored/total*100):0}%"></div>
+        </div>
+        ${projectsHtml}
+      </div>
+      <div id="score-modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;display:flex;align-items:center;justify-content:center">
+        <div style="background:#0B1020;border:1px solid #00E5D0;padding:28px;border-radius:6px;min-width:320px;max-width:480px;width:90%">
+          <h3 id="score-modal-title" style="margin:0 0 16px">Score Project</h3>
+          <input type="hidden" id="score-project-id">
+          <div class="form-group"><label>Functionality (1–5)</label>
+            <input id="score-func" type="number" min="1" max="5" style="width:60px"></div>
+          <div class="form-group"><label>Quality (1–5)</label>
+            <input id="score-qual" type="number" min="1" max="5" style="width:60px"></div>
+          <div class="form-group"><label>Innovation (1–5)</label>
+            <input id="score-innov" type="number" min="1" max="5" style="width:60px"></div>
+          <div class="form-group"><label>Comment (optional)</label>
+            <textarea id="score-comment" rows="3" style="width:100%;box-sizing:border-box"></textarea></div>
+          <div style="display:flex;gap:10px;margin-top:12px">
+            <button class="btn btn-primary" onclick="submitScore()">Save Score</button>
+            <button class="btn btn-outline" onclick="closeScoreModal()">Cancel</button>
+          </div>
+          <p id="score-msg" style="margin-top:10px;color:#00E5D0"></p>
+        </div>
+      </div>`;
+    }
+
+    // My submitted scores section
+    const myScoresResp = await authFetch('/api/judge/scores');
+    if (myScoresResp.ok) {
+      const myScores = await myScoresResp.json();
+      if (myScores.length > 0) {
+        const rows = myScores.map(s => `
+          <tr>
+            <td>${s.project_id}</td>
+            <td>${s.criteria.functionality ?? '—'}</td>
+            <td>${s.criteria.quality ?? '—'}</td>
+            <td>${s.criteria.innovation ?? '—'}</td>
+            <td>${s.comment || ''}</td>
+            <td style="font-size:0.8em">${s.scored_at ? s.scored_at.slice(0,19).replace('T',' ') : ''}</td>
+          </tr>
+        `).join('');
+        html += `<div class="dashboard-section">
+          <h2>My Submitted Scores</h2>
+          <table class="progress-table" style="font-size:0.85em">
+            <thead><tr><th>Project</th><th>Func</th><th>Qual</th><th>Innov</th><th>Comment</th><th>Scored At</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+      }
+    }
+  }
+
+  document.getElementById('dashboard-content').innerHTML = html;
+}
+
+function showCreateEvent() {
+  document.getElementById('create-event-form').classList.toggle('hidden');
+}
+
+async function exportScoresCsv() {
+  const resp = await authFetch('/api/export.csv');
+  if (!resp.ok) {
+    alert('Unable to export scores.');
+    return;
+  }
+
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'judging_scores.csv';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function createEvent() {
+  const name = document.getElementById('ev-name').value;
+  const desc = document.getElementById('ev-desc').value;
+  const close = document.getElementById('ev-close').value;
+  if (!name || !close) { alert('Name and close date are required'); return; }
+  const resp = await fetch('/api/events', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description: desc, submissions_close: close + ':00Z', tracks: [] })
+  });
+  if (resp.ok) {
+    alert('Event created!');
+    location.reload();
+  } else {
+    const err = await resp.json();
+    alert('Error: ' + (err.detail || 'Unknown error'));
+  }
+}
+
+async function createTeam() {
+  const name = document.getElementById('team-name').value;
+  const event_id = document.getElementById('team-event').value;
+  if (!name) { alert('Team name is required'); return; }
+  const resp = await fetch('/api/teams', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, event_id })
+  });
+  if (resp.ok) {
+    alert('Team created!');
+    location.reload();
+  } else {
+    const err = await resp.json();
+    alert('Error: ' + (err.detail || 'Unknown error'));
+  }
+}
+
+async function openScoreForm(projectId, projectTitle) {
+  document.getElementById('score-project-id').value = projectId;
+  document.getElementById('score-modal-title').textContent = 'Score: ' + projectTitle;
+  document.getElementById('score-msg').textContent = '';
+  // Pre-fill if already scored
+  const resp = await authFetch('/api/judge/scores/' + projectId);
+  if (resp.ok) {
+    const data = await resp.json();
+    if (data.is_scored && data.score) {
+      document.getElementById('score-func').value = data.score.criteria.functionality || '';
+      document.getElementById('score-qual').value = data.score.criteria.quality || '';
+      document.getElementById('score-innov').value = data.score.criteria.innovation || '';
+      document.getElementById('score-comment').value = data.score.comment || '';
+    } else {
+      document.getElementById('score-func').value = '';
+      document.getElementById('score-qual').value = '';
+      document.getElementById('score-innov').value = '';
+      document.getElementById('score-comment').value = '';
+    }
+  }
+  const modal = document.getElementById('score-modal');
+  modal.classList.remove('hidden');
+  modal.style.display = 'flex';
+}
+
+function closeScoreModal() {
+  const modal = document.getElementById('score-modal');
+  modal.classList.add('hidden');
+  modal.style.display = '';
+}
+
+async function submitScore() {
+  const projectId = document.getElementById('score-project-id').value;
+  const func = parseInt(document.getElementById('score-func').value);
+  const qual = parseInt(document.getElementById('score-qual').value);
+  const innov = parseInt(document.getElementById('score-innov').value);
+  const comment = document.getElementById('score-comment').value;
+
+  if (!func || !qual || !innov) {
+    document.getElementById('score-msg').textContent = 'Please fill in all criteria (1–5).';
+    return;
+  }
+  if (func<1||func>5||qual<1||qual>5||innov<1||innov>5) {
+    document.getElementById('score-msg').textContent = 'Values must be between 1 and 5.';
+    return;
+  }
+
+  const resp = await authFetch('/api/judge/scores', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: projectId, criteria: { functionality: func, quality: qual, innovation: innov }, comment })
+  });
+
+  if (resp.ok) {
+    document.getElementById('score-msg').textContent = '✓ Score saved!';
+    setTimeout(() => { closeScoreModal(); location.reload(); }, 700);
+  } else {
+    const err = await resp.json();
+    document.getElementById('score-msg').textContent = 'Error: ' + (err.detail || 'Unknown error');
+  }
+}
+
+loadDashboard();
+</script>
+
+<style>
+.progress-table { width:100%; border-collapse:collapse; margin-top:12px; font-size:0.9em; }
+.progress-table th, .progress-table td { padding:8px 10px; border:1px solid #1B2540; text-align:left; }
+.progress-table th { background:#0E1428; color:#00E5D0; }
+.progress-bar-wrap { display:inline-block; width:80px; height:8px; background:#1B2540; border-radius:4px; vertical-align:middle; margin-right:6px; }
+.progress-bar-fill { height:8px; background:#00E5D0; border-radius:4px; }
+</style>
+{% endblock %}

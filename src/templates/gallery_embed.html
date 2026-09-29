@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ event.name }} · Project Gallery</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #172033; background: #f5f7fb; }
+    body { margin: 0; padding: 16px; }
+    h1 { margin: 0 0 14px; font-size: 1.25rem; }
+    .projects { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; }
+    article { min-width: 0; padding: 14px; border: 1px solid #d8deea; border-radius: 6px; background: #fff; }
+    h2 { margin: 0 0 8px; font-size: 1rem; }
+    p { margin: 0; color: #526078; line-height: 1.5; overflow-wrap: anywhere; }
+    .empty { color: #526078; }
+  </style>
+</head>
+<body>
+  <h1>{{ event.name }} · Submitted projects</h1>
+  <main class="projects">
+    {% for project in projects %}
+    <article>
+      <h2>{{ project.title }}</h2>
+      <p>{{ project.summary or '' }}</p>
+    </article>
+    {% else %}
+    <p class="empty">No submitted projects.</p>
+    {% endfor %}
+  </main>
+</body>
+</html>

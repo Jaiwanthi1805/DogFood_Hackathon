@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ event.name }} · DOGFOOD 2026{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/events">← Events</a></div>
+<h1>{{ event.name }}</h1>
+<div class="event-meta">
+  <p><strong>Submissions close:</strong> {{ event.submissions_close.strftime('%Y-%m-%d %H:%M UTC') }}</p>
+  <p><strong>Status:</strong>
+    {% if event.submissions_close > now %}
+      <span class="status-badge status-open">Open</span>
+    {% else %}
+      <span class="status-badge status-closed">Closed</span>
+    {% endif %}
+  </p>
+</div>
+<h2>Tracks</h2>
+<ul>
+  {% for track in event.tracks %}
+  <li>{{ track.name }}</li>
+  {% else %}
+  <li>No tracks defined.</li>
+  {% endfor %}
+</ul>
+<div class="event-actions">
+  <button class="btn btn-primary" onclick="register()">Register for this Event</button>
+  <a href="/submit" class="btn btn-secondary">Submit a Project</a>
+  <a id="community-vote-link" class="btn btn-outline hidden" href="/events/{{ event.id }}/vote">Community vote</a>
+</div>
+
+<section id="voting-admin" class="dashboard-section hidden" style="margin-top:24px">
+  <h2>Community voting</h2>
+  <form id="voting-config-form">
+    <div class="form-group">
+      <label for="voting-start">Voting starts</label>
+      <input id="voting-start" type="datetime-local" required>
+    </div>
+    <div class="form-group">
+      <label for="voting-end">Voting ends</label>
+      <input id="voting-end" type="datetime-local" required>
+    </div>
+    <div class="form-group">
+      <label for="voting-eligibility">Eligible voters</label>
+      <select id="voting-eligibility">
+        <option value="registered_participants">Registered participants</option>
+        <option value="all_participants">All authenticated participants</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label><input id="voting-enabled" type="checkbox" checked style="width:auto"> Enable community voting</label>
+      <label><input id="voting-hide-results" type="checkbox" checked style="width:auto"> Hide results during voting</label>
+    </div>
+    <button class="btn btn-primary" type="submit">Save voting settings</button>
+    <a id="voting-audit-link" class="btn btn-outline hidden" href="#" target="_blank">View audit trail</a>
+    <p id="voting-config-message" role="status" style="margin-top:10px"></p>
+  </form>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const eventId = {{ event.id | tojson }};
+
+function toLocalDateTime(value) {
+  const date = new Date(value);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 16);
+}
+
+async function register() {
+  const token = localStorage.getItem('dogfood_token');
+  if (!token) { window.location.href = '/login'; return; }
+  const resp = await fetch('/api/events/{{ event.id }}/register', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token }
+  });
+  const data = await resp.json();
+  alert(data.message || 'Done');
+}
+
+(async function loadVotingSettings() {
+  const token = localStorage.getItem('dogfood_token');
+  const admin = document.getElementById('voting-admin');
+  if (token) {
+    const me = await fetch('/api/auth/me', {headers: {'Authorization': 'Bearer ' + token}});
+    if (me.ok && (await me.json()).role === 'organizer') admin.classList.remove('hidden');
+  }
+
+  const configResponse = await fetch(`/api/events/${eventId}/voting`);
+  if (!configResponse.ok) return;
+  const config = await configResponse.json();
+  if (config.enabled) document.getElementById('community-vote-link').classList.remove('hidden');
+  if (!admin.classList.contains('hidden')) {
+    document.getElementById('voting-start').value = toLocalDateTime(config.starts_at);
+    document.getElementById('voting-end').value = toLocalDateTime(config.ends_at);
+    document.getElementById('voting-eligibility').value = config.eligibility;
+    document.getElementById('voting-enabled').checked = config.enabled;
+    document.getElementById('voting-hide-results').checked = config.hide_results;
+    const auditLink = document.getElementById('voting-audit-link');
+    auditLink.href = `/api/events/${eventId}/voting/audit`;
+    auditLink.classList.remove('hidden');
+  }
+})();
+
+document.getElementById('voting-config-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const token = localStorage.getItem('dogfood_token');
+  const message = document.getElementById('voting-config-message');
+  const response = await fetch(`/api/events/${eventId}/voting`, {
+    method: 'PUT',
+    headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      enabled: document.getElementById('voting-enabled').checked,
+      eligibility: document.getElementById('voting-eligibility').value,
+      starts_at: new Date(document.getElementById('voting-start').value).toISOString(),
+      ends_at: new Date(document.getElementById('voting-end').value).toISOString(),
+      hide_results: document.getElementById('voting-hide-results').checked,
+    }),
+  });
+  const result = await response.json();
+  message.textContent = response.ok ? 'Voting settings saved.' : (result.detail || 'Unable to save settings.');
+  if (response.ok && result.enabled) document.getElementById('community-vote-link').classList.remove('hidden');
+  else if (response.ok) document.getElementById('community-vote-link').classList.add('hidden');
+});
+</script>
+{% endblock %}
